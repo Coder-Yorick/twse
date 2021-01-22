@@ -3,3 +3,5 @@
 - apt update
 - apt install libgl1-mesa-glx
 - apt-get install tesseract-ocr
+### Prepare
+- prepare credentials.json file to utils
