@@ -1,0 +1,7 @@
+requests
+lxml
+bs4
+pillow
+opencv-python
+pytesseract
+gspread
