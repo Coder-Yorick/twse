@@ -1,3 +1,5 @@
+# !/usr/bin/python
+# coding:utf-8
 from PIL import Image
 from bs4 import BeautifulSoup as BS
 import requests
@@ -11,6 +13,7 @@ from shutil import copyfile
 from utils.data_parse import DataParse
 from utils.captcha import ocr
 from utils.googleapi import CloudSheet
+from flask import Flask, jsonify
 
 util = DataParse()
 session = requests.Session()
@@ -18,20 +21,32 @@ auto_captcha = True
 STOREIMG = False
 cs = CloudSheet()
 
-TARGETS = ['2330', '1907', '2353', '1218']
+# TARGETS = ['2330', '1907', '2353', '1218']
 
-def main():
-    stockids = TARGETS
-    for stockid in stockids:
-        stock_data = get_stock_data(stockid)
-        if stock_data:
-            result = my_analysis(stockid, stock_data)
-            if store(stockid, result):
-                print('{}:done!'.format(stockid))
-        else:
-            print('{}:解析失敗'.format(stockid))
-        # results = processdata(stockid, soupdata)
-        # print(results)
+app = Flask(__name__)
+
+@app.route('/')
+def health_check():
+    return 'service is running'
+
+@app.route('/store/check/<string:stock_id>', methods=['GET'])
+def store_check(stock_id):
+    return jsonify({'result': store_check(stock_id)})
+
+@app.route('/record/<string:stock_id>', methods=['POST'])
+def record(stock_id):
+    return jsonify({'result': record_stock(stock_id)})
+
+def record_stock(stockid):
+    stock_data = get_stock_data(stockid)
+    if stock_data:
+        result = my_analysis(stockid, stock_data)
+        if store(stockid, result):
+            print('{}:done!'.format(stockid))
+            return True
+    else:
+        print('{}:解析失敗'.format(stockid))
+    return False
 
 def my_analysis(stockid, soupdata):
     dat = util.transdate(soupdata.select('#receive_date')[0].text.strip('\r\n '))
@@ -68,17 +83,20 @@ def my_analysis(stockid, soupdata):
             out_brokers.append(trade_data)
     d['買超股數'] = in_amount
     d['買超券商家數'] = len(in_brokers)
-    in_brokers = sorted(in_brokers, key=lambda bk : bk['amount'], reverse=True)
     d['買超券商'] = []
-    top_in_amount = 0
-    for in_broker in in_brokers[:10]:
-        top_in_amount += in_broker['amount']
+    d['賣超券商'] = []
+    for in_broker in in_brokers:
         d['買超券商'].append({
             'name': in_broker['name'],
             'amount': in_broker['amount'],
             'price': in_broker['account'] / in_broker['amount']
         })
-    d['當日籌碼集中度'] = top_in_amount / in_amount if in_amount > 0 else None
+    for out_broker in out_brokers:
+        d['賣超券商'].append({
+            'name': out_broker['name'],
+            'amount': out_broker['amount'],
+            'price': out_broker['account'] / out_broker['amount']
+        })    
     return d
 
 def store(stockid, data):
@@ -94,7 +112,7 @@ def store(stockid, data):
             if last_update_date == data['日期']:
                 print('{}:資料已存在({})'.format(stockid, str(last_update_date)))
                 return False
-        cols = ['日期', '開盤價', '最高價', '最低價', '收盤價', '總成交股數', '買超股數', '買超券商家數', '當日籌碼集中度']
+        cols = ['日期', '開盤價', '最高價', '最低價', '收盤價', '總成交股數', '買超股數', '買超券商家數']
         for i, col in enumerate(cols):
             sh.update_cell(row_count, i + 1, str(data[col]))
         # 籌碼紀錄
@@ -102,17 +120,22 @@ def store(stockid, data):
         ho_stocks = ho_sh.row_values(1)
         for i, ho_stock in enumerate(ho_stocks):
             if ho_stock == stockid:
-                broker_datas = ho_sh.col_values(i+1)[1:]
+                broker_datas = ho_sh.col_values(i+1)[1:] # 目前買最多的券商
                 brokers = {}
                 for broker_data in broker_datas:
                     b = broker_data.split('$$')
                     if len(b) == 2:
                         brokers[b[0]] = int(b[1])
-                for c_broker in data['買超券商']:
-                    if c_broker['name'] not in brokers:
-                        brokers[c_broker['name']] = c_broker['amount']
+                for in_broker in data['買超券商']:
+                    if in_broker['name'] not in brokers:
+                        brokers[in_broker['name']] = in_broker['amount']
                     else:
-                        brokers[c_broker['name']] += c_broker['amount']
+                        brokers[in_broker['name']] += in_broker['amount']
+                for out_broker in data['賣超券商']:
+                    if out_broker['name'] in brokers:
+                        brokers[out_broker['name']] += out_broker['amount']
+                        if brokers[out_broker['name']] <= 0:
+                            del brokers[out_broker['name']]
                 holding_brokers = sorted(brokers.items(), key=lambda bk : bk[1], reverse=True)
                 if len(holding_brokers) > 10:
                     holding_brokers = holding_brokers[:10]
@@ -123,12 +146,35 @@ def store(stockid, data):
                 for y, (holding_broker_name, holding_broker_amount) in enumerate(holding_brokers):
                     ho_sh.update_cell(y + 2, i + 1, '{}$${}'.format(holding_broker_name, holding_broker_amount))
                     holding_total_amount += holding_broker_amount
-                # 累計籌碼集中度
-                in_amounts = sh.col_values(7)[1:]
+                # 籌碼集中度 (累計買超前10名買超數 / 累計買超總數)
+                in_amounts = sh.col_values(7)[1:] # 累計買超總數
                 holding = holding_total_amount / sum([int(in_amount.replace(',', '')) for in_amount in in_amounts])
-                sh.update_cell(row_count, 12, holding)
+                sh.update_cell(row_count, 11, holding)
                 break
         return True
+    except Exception as ex:
+        print(ex)
+    return False
+
+def store_check(stockid):
+    try:
+        ws = cs.openSheet("twse")
+        shs = ws.worksheets()
+        if shs and stockid in [sh.title for sh in shs]:
+            return True
+        else:
+            temp_sh = ws.worksheet('2330')
+            titles = temp_sh.row_values(1)
+            # tab
+            sh = ws.add_worksheet(title=stockid, rows=temp_sh.row_count, cols=len(titles))
+            for i, v in enumerate(titles):
+                sh.update_cell(1, i + 1, v)
+            sh.freeze(rows=1)
+            # holdings
+            ho_sh = ws.worksheet('holdings')
+            ho_stocks = ho_sh.row_values(1)
+            ho_sh.update_cell(1, len(ho_stocks) + 1, stockid)
+            return True
     except Exception as ex:
         print(ex)
     return False
@@ -140,8 +186,8 @@ def get_stock_data(stockid):
         result = post_bs_data(stockid)
         retry += 1
         if result == 2:
-            print('5秒後重試...')
-        time.sleep(5)
+            print('3秒後重試...')
+        time.sleep(3)
     if result == 1:
         # 查詢成功, 讀取csv檔
         resq = session.get('http://bsr.twse.com.tw/bshtm/bsContent.aspx?v=t')
@@ -235,4 +281,4 @@ def post_bs_data(stock_id):
     return 1
 
 if __name__ == '__main__':
-    main()
+    app.run(host='0.0.0.0', port=5000, debug=True)
