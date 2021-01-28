@@ -85,18 +85,24 @@ def my_analysis(stockid, soupdata):
     d['買超券商家數'] = len(in_brokers)
     d['買超券商'] = []
     d['賣超券商'] = []
+    max_in_amount = 0
+    min_out_amount = 0
     for in_broker in in_brokers:
+        max_in_amount = max(max_in_amount, in_broker['amount'])
         d['買超券商'].append({
             'name': in_broker['name'],
             'amount': in_broker['amount'],
             'price': in_broker['account'] / in_broker['amount']
         })
     for out_broker in out_brokers:
+        min_out_amount = min(min_out_amount, out_broker['amount'])
         d['賣超券商'].append({
             'name': out_broker['name'],
             'amount': out_broker['amount'],
             'price': out_broker['account'] / out_broker['amount']
-        })    
+        })
+    d['重押比'] = max_in_amount / int(allshare)
+    d['買超異常'] = (max_in_amount / -min_out_amount) if min_out_amount < 0 else 0
     return d
 
 def store(stockid, data):
@@ -112,7 +118,7 @@ def store(stockid, data):
             if last_update_date == data['日期']:
                 print('{}:資料已存在({})'.format(stockid, str(last_update_date)))
                 return False
-        cols = ['日期', '開盤價', '最高價', '最低價', '收盤價', '總成交股數', '買超股數', '買超券商家數']
+        cols = ['日期', '開盤價', '最高價', '最低價', '收盤價', '總成交股數', '買超股數', '買超券商家數', '重押比', '買超異常']
         for i, col in enumerate(cols):
             sh.update_cell(row_count, i + 1, str(data[col]))
         # 籌碼紀錄
