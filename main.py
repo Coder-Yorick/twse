@@ -195,7 +195,7 @@ def get_record(stockid):
         sh = ws.worksheet(stockid)
         dates = sh.col_values(1)
         if len(dates) > 1:
-            row = sh.row_values(len(datas))
+            row = sh.row_values(len(dates))
             return {
                 'date': row[0],
                 'price': row[4],
