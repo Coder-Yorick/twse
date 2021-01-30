@@ -37,6 +37,10 @@ def store_check(stock_id):
 def record(stock_id):
     return jsonify({'result': record_stock(stock_id)})
 
+@app.route('/record/<string:stock_id>', methods=['GET'])
+def get_record(stock_id):
+    return jsonify({'result': get_record(stock_id)})
+
 def record_stock(stockid):
     stock_data = get_stock_data(stockid)
     if stock_data:
@@ -184,6 +188,26 @@ def store_check(stockid):
     except Exception as ex:
         print(ex)
     return False
+
+def get_record(stockid):
+    try:
+        ws = cs.openSheet("twse")
+        sh = ws.worksheet(stockid)
+        dates = sh.col_values(1)
+        if len(dates) > 1:
+            row = sh.row_values(len(datas))
+            return {
+                'date': row[0],
+                'price': row[4],
+                'ob_rate': row[9],
+                'scr': row[10],
+                'price_gap': row[11],
+                'broker_gap': row[12],
+                'score': row[13]
+            }
+    except Exception as ex:
+        print(ex)
+    return None
 
 def get_stock_data(stockid):
     result = 2
