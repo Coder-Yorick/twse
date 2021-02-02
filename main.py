@@ -14,14 +14,15 @@ from utils.data_parse import DataParse
 from utils.captcha import ocr
 from utils.googleapi import CloudSheet
 from flask import Flask, jsonify
+import queue
+import threading
 
 util = DataParse()
 session = requests.Session()
 auto_captcha = True
 STOREIMG = False
 cs = CloudSheet()
-
-# TARGETS = ['2330', '1907', '2353', '1218']
+task_queue = queue.Queue(maxsize=1)
 
 app = Flask(__name__)
 
@@ -35,11 +36,28 @@ def store_check(stock_id):
 
 @app.route('/record/<string:stock_id>', methods=['POST'])
 def record(stock_id):
-    return jsonify({'result': record_stock(stock_id)})
+    if not task_queue.full():
+        task_queue.put(stock_id)
+        return jsonify({'result': True})
+    return jsonify({'result': False})
+
+@app.route('/task/reset', methods=['POST'])
+def task_reset():
+    if not task_queue.empty():
+        task_queue.queue.clear()
+    return jsonify({'result': True})
+
+@app.route('/task/size', methods=['GET'])
+def task_size():
+    return jsonify({'result': task_queue.qsize()})
 
 @app.route('/record/<string:stock_id>', methods=['GET'])
 def get_record(stock_id):
     return jsonify({'result': get_record(stock_id)})
+
+@app.route('/store/support', methods=['GET'])
+def get_support():
+    return jsonify({'result': get_support()})
 
 def record_stock(stockid):
     stock_data = get_stock_data(stockid)
@@ -118,7 +136,7 @@ def store(stockid, data):
         row_count = 2
         if len(dates) > 1:
             row_count = len(dates) + 1
-            last_update_date = datetime.strptime(dates[-1], '%Y-%M-%d').date()
+            last_update_date = datetime.strptime(dates[-1], '%Y-%m-%d').date()
             if last_update_date == data['日期']:
                 print('{}:資料已存在({})'.format(stockid, str(last_update_date)))
                 return False
@@ -188,6 +206,15 @@ def store_check(stockid):
     except Exception as ex:
         print(ex)
     return False
+
+def get_support():
+    try:
+        ws = cs.openSheet("twse")
+        shs = ws.worksheets()
+        return [sh.title for sh in shs if sh.title not in ['holdings', 's']]
+    except Exception as ex:
+        print(ex)
+    return []
 
 def get_record(stockid):
     try:
@@ -310,5 +337,20 @@ def post_bs_data(stock_id):
     store_captcha(captcha_filename, vcode, True)
     return 1
 
+class TaskWorker(threading.Thread):
+    def __init__(self, task_q):
+        self.tq = task_q
+        super().__init__()
+    def run(self):
+        while True:
+            try:
+                if not self.tq.empty():
+                    stock_id = self.tq.get(timeout=1)
+                    record_stock(stock_id)
+            except Exception as ex:
+                print(ex)
+                break
+
 if __name__ == '__main__':
+    TaskWorker(task_queue).start()
     app.run(host='0.0.0.0', port=5000, debug=True)
