@@ -22,7 +22,7 @@ session = requests.Session()
 auto_captcha = True
 STOREIMG = False
 cs = CloudSheet()
-task_queue = queue.Queue(maxsize=1)
+task_queue = queue.Queue(maxsize=30)
 
 app = Flask(__name__)
 
@@ -347,6 +347,7 @@ class TaskWorker(threading.Thread):
                 if not self.tq.empty():
                     stock_id = self.tq.get(timeout=1)
                     record_stock(stock_id)
+                    time.sleep(3)
             except Exception as ex:
                 print(ex)
                 break
